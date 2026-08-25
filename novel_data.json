@@ -1,0 +1,145 @@
+{
+  "type": "novel",
+  "name": "我的小说",
+  "children": [
+    {
+      "type": "volume",
+      "name": "第一卷",
+      "content": "",
+      "children": [
+        {
+          "type": "chapter",
+          "name": "1",
+          "content": "",
+          "_level": 2
+        },
+        {
+          "type": "chapter",
+          "name": "2",
+          "content": "",
+          "_level": 2
+        },
+        {
+          "type": "chapter",
+          "name": "3",
+          "content": "",
+          "_level": 2
+        }
+      ],
+      "_level": 1
+    },
+    {
+      "type": "volume",
+      "name": "第二卷",
+      "children": [
+        {
+          "type": "chapter",
+          "name": "1",
+          "content": "",
+          "_level": 2
+        },
+        {
+          "type": "chapter",
+          "name": "2",
+          "content": "",
+          "_level": 2
+        }
+      ],
+      "_level": 1
+    },
+    {
+      "type": "volume",
+      "name": "第三卷",
+      "children": [
+        {
+          "type": "chapter",
+          "name": "1",
+          "content": "",
+          "_level": 2
+        }
+      ],
+      "_level": 1
+    },
+    {
+      "type": "volume",
+      "name": "第四卷",
+      "children": [
+        {
+          "type": "chapter",
+          "name": "1",
+          "content": "",
+          "_level": 2
+        },
+        {
+          "type": "chapter",
+          "name": "2",
+          "content": ""
+        }
+      ],
+      "_level": 1
+    },
+    {
+      "type": "outline",
+      "name": "大纲",
+      "children": [
+        {
+          "type": "character",
+          "name": "人设",
+          "content": "",
+          "children": [
+            {
+              "type": "character",
+              "name": "唐熔",
+              "content": "他好帅",
+              "_level": 3
+            }
+          ],
+          "_level": 2
+        },
+        {
+          "type": "relation",
+          "name": "人物关系",
+          "content": "",
+          "_level": 2
+        },
+        {
+          "type": "inspire",
+          "name": "灵感",
+          "content": "",
+          "_level": 2
+        },
+        {
+          "type": "storyline",
+          "name": "故事线",
+          "tree_data": [
+            {
+              "name": "1",
+              "children": [
+                {
+                  "name": "2",
+                  "children": [
+                    {
+                      "name": "3",
+                      "children": [
+                        {
+                          "name": "新节点",
+                          "children": []
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "name": "新节点",
+                  "children": []
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "_level": 1
+    }
+  ],
+  "_level": 0
+}
