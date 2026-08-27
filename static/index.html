@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>小说写作软件</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body data-theme="day">
+
+  <!-- 背景层：可放上传的背景图，cover 铺满 -->
+  <div id="bg-layer"></div>
+
+  <!-- 启动欢迎页 -->
+  <div id="welcome" class="welcome">
+    <div class="welcome-inner">
+      <img class="welcome-logo" src="/static/icon.png" alt="logo">
+      <h1 class="welcome-title">小说写作软件</h1>
+      <span class="welcome-sub">Novel Studio</span>
+      <div class="welcome-bar"><div class="welcome-bar-fill"></div></div>
+    </div>
+  </div>
+
+  <div id="app">
+    <!-- ============ 顶部工具栏 ============ -->
+    <header id="toolbar">
+      <div class="brand">
+        <div class="logo">✍️</div>
+        <div class="brand-text">
+          <h1>小说写作软件</h1>
+          <span class="sub">Novel Studio</span>
+        </div>
+      </div>
+      <div class="toolbar-btns">
+        <button id="btn-new-novel" class="btn primary" title="新建一本小说">＋ 新建小说</button>
+        <button id="btn-export" class="btn" title="导出为 Markdown/TXT">导出文本</button>
+        <button id="btn-batch-del" class="btn danger" title="删除当前选中的多个节点">批量删除</button>
+
+        <div class="dropdown">
+          <button class="btn" id="btn-theme">界面模式 ▾</button>
+          <div class="dropdown-menu" id="theme-menu">
+            <a data-theme="day">☀️ 日光模式</a>
+            <a data-theme="night">🌙 夜晚模式</a>
+            <a data-theme="eye">👁️ 护眼模式</a>
+          </div>
+        </div>
+
+        <button id="btn-settings" class="btn" title="界面设置、背景图">界面设置</button>
+        <button id="btn-save" class="btn accent" title="保存全部修改 (Ctrl+S)">💾 保存</button>
+      </div>
+    </header>
+
+    <!-- ============ 主体 ============ -->
+    <main id="main">
+      <!-- 左侧目录树 -->
+      <aside id="sidebar">
+        <div class="sidebar-head">
+          <span>📚 小说目录</span>
+          <button id="btn-add-root" class="icon-btn" title="新建小说">＋</button>
+        </div>
+        <div id="tree" class="tree"></div>
+        <div class="sidebar-hint">右键节点 → 操作 · Ctrl/Shift 多选 · 拖动排序</div>
+      </aside>
+
+      <!-- 右侧编辑区 -->
+      <section id="editor-area">
+        <div id="tabs" class="tabs"></div>
+        <div id="editor-container">
+          <div class="empty-state" id="empty-state">
+            <div class="empty-icon">📖</div>
+            <p>双击左侧节点开始编辑</p>
+            <p class="empty-sub">支持右键设置字号 / 颜色 / 加粗</p>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer id="statusbar">
+      <span id="status-text">就绪</span>
+      <span class="spacer"></span>
+      <span id="save-state"></span>
+    </footer>
+  </div>
+
+  <!-- 右键菜单 -->
+  <div id="ctx-menu" class="ctx-menu hidden"></div>
+
+  <!-- 设置弹窗 -->
+  <div id="modal-mask" class="hidden">
+    <div id="settings-modal" class="modal">
+      <div class="modal-head">
+        <span>⚙️ 界面设置</span>
+        <button class="modal-close" id="modal-close">✕</button>
+      </div>
+      <div class="modal-body">
+
+        <div class="form-group">
+          <label>界面模式</label>
+          <div class="seg" id="seg-theme">
+            <button data-theme="day">☀️ 日光</button>
+            <button data-theme="night">🌙 夜晚</button>
+            <button data-theme="eye">👁️ 护眼</button>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>编辑器默认字号</label>
+          <input type="range" id="set-font-size" min="12" max="36" step="1">
+          <span id="set-font-size-val" class="val">14</span>
+        </div>
+
+        <div class="form-group">
+          <label>默认文字颜色</label>
+          <input type="color" id="set-font-color" value="#222222">
+        </div>
+
+        <div class="form-group">
+          <label>窗口背景</label>
+          <div class="bg-row">
+            <button id="btn-upload-bg" class="btn">🖼️ 上传背景图</button>
+            <button id="btn-clear-bg" class="btn">清除背景</button>
+          </div>
+          <input type="file" id="bg-file" accept="image/*" class="hidden">
+          <div id="bg-preview" class="bg-preview"></div>
+        </div>
+
+      </div>
+      <div class="modal-foot">
+        <button id="btn-reset" class="btn">恢复默认</button>
+        <span class="spacer"></span>
+        <button id="btn-settings-cancel" class="btn">取消</button>
+        <button id="btn-settings-ok" class="btn primary">应用</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 分屏浮动面板 -->
+  <div id="split-panel" class="hidden">
+    <div class="split-head">
+      <span id="split-title">分屏</span>
+      <div class="split-actions">
+        <button id="split-close" class="icon-btn" title="关闭分屏">✕</button>
+      </div>
+    </div>
+    <div id="split-body"></div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
