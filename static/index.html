@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>小说写作软件</title>
+  <title>小说写作软件 · Novel Studio</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body data-theme="day">
@@ -31,48 +31,385 @@
           <span class="sub">Novel Studio</span>
         </div>
       </div>
+
+      <!-- 视图切换 -->
+      <div class="view-switch" id="view-switch">
+        <button class="vbtn active" data-view="write">✍️ 写作</button>
+        <button class="vbtn" data-view="graph">🕸️ 关系图谱</button>
+        <button class="vbtn" data-view="workbench">🛠️ 故事流工作台</button>
+        <button class="vbtn" data-view="script">🎬 剧本</button>
+        <button class="vbtn" data-view="split">📖 拆书</button>
+        <button class="vbtn" data-view="comic">🎨 AI提示词</button>
+        <button class="vbtn" data-view="ocr">🔍 图片识别</button>
+      </div>
+
       <div class="toolbar-btns">
         <button id="btn-new-novel" class="btn primary" title="新建一本小说">＋ 新建小说</button>
         <button id="btn-export" class="btn" title="导出为 Markdown/TXT">导出文本</button>
         <button id="btn-batch-del" class="btn danger" title="删除当前选中的多个节点">批量删除</button>
 
-        <div class="dropdown">
-          <button class="btn" id="btn-theme">界面模式 ▾</button>
-          <div class="dropdown-menu" id="theme-menu">
-            <a data-theme="day">☀️ 日光模式</a>
-            <a data-theme="night">🌙 夜晚模式</a>
-            <a data-theme="eye">👁️ 护眼模式</a>
-          </div>
-        </div>
-
-        <button id="btn-settings" class="btn" title="界面设置、背景图">界面设置</button>
+        <button id="btn-settings" class="btn" title="主题、字号、背景图、AI 配置">⚙️ 设置</button>
         <button id="btn-save" class="btn accent" title="保存全部修改 (Ctrl+S)">💾 保存</button>
       </div>
     </header>
 
     <!-- ============ 主体 ============ -->
     <main id="main">
-      <!-- 左侧目录树 -->
-      <aside id="sidebar">
-        <div class="sidebar-head">
-          <span>📚 小说目录</span>
-          <button id="btn-add-root" class="icon-btn" title="新建小说">＋</button>
-        </div>
-        <div id="tree" class="tree"></div>
-        <div class="sidebar-hint">右键节点 → 操作 · Ctrl/Shift 多选 · 拖动排序</div>
-      </aside>
 
-      <!-- 右侧编辑区 -->
-      <section id="editor-area">
-        <div id="tabs" class="tabs"></div>
-        <div id="editor-container">
-          <div class="empty-state" id="empty-state">
-            <div class="empty-icon">📖</div>
-            <p>双击左侧节点开始编辑</p>
-            <p class="empty-sub">支持右键设置字号 / 颜色 / 加粗</p>
+      <!-- ===== 视图：写作 ===== -->
+      <section id="view-write" class="view active">
+        <!-- 左侧目录树 -->
+        <aside id="sidebar">
+          <div class="sidebar-head">
+            <span>📚 小说目录</span>
+            <button id="btn-add-root" class="icon-btn" title="新建小说">＋</button>
+          </div>
+          <div id="tree" class="tree"></div>
+          <div class="sidebar-hint">右键节点 → 操作 · Ctrl/Shift 多选 · 拖动排序 · 拍内容里用 [[实体名]] 建立关联</div>
+        </aside>
+
+        <!-- 右侧编辑区 -->
+        <section id="editor-area">
+          <div id="tabs" class="tabs"></div>
+          <div id="editor-container">
+            <div class="empty-state" id="empty-state">
+              <div class="empty-icon">📖</div>
+              <p>双击左侧节点开始编辑</p>
+              <p class="empty-sub">支持右键设置字号 / 颜色 / 加粗 · 章下可建「拍」</p>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <!-- ===== 视图：关系图谱 ===== -->
+      <section id="view-graph" class="view">
+        <div id="graph-wrap">
+          <canvas id="graph-canvas"></canvas>
+          <!-- 左侧筛选面板 -->
+          <div id="graph-side" class="glass-panel">
+            <div class="gp-title">关系图谱沙盒</div>
+            <select id="graph-novel" class="gp-select" title="选择小说"></select>
+            <input id="graph-search" class="gp-input" placeholder="搜索节点 ID 或名称…">
+            <div class="gp-sub">节点类型</div>
+            <div id="graph-filters" class="gp-filters"></div>
+            <div class="gp-sub">显示</div>
+            <label class="gp-check"><input type="checkbox" id="gp-labels" checked> 节点标签</label>
+            <label class="gp-check"><input type="checkbox" id="gp-struct" checked> 结构连线</label>
+            <label class="gp-check"><input type="checkbox" id="gp-semantic" checked> 语义连线</label>
+            <div class="gp-actions">
+              <button class="btn" id="gp-2d">2D 模式</button>
+              <button class="btn" id="gp-3d">3D 模式</button>
+              <button class="btn" id="gp-fit">适应画布</button>
+              <button class="btn" id="gp-reheat">重新布局</button>
+            </div>
+            <label class="gp-check" id="gp-autorotate-wrap" style="display:none"><input type="checkbox" id="gp-autorotate" checked> 3D 自动旋转</label>
+            <div class="gp-stats" id="graph-stats"></div>
+          </div>
+          <!-- 右侧详情面板 -->
+          <div id="graph-detail" class="glass-panel hidden">
+            <div class="gp-detail-head">
+              <span id="gd-type" class="gd-badge"></span>
+              <span id="gd-title" class="gd-title"></span>
+              <button class="icon-btn" id="gd-close">✕</button>
+            </div>
+            <div id="gd-body" class="gd-body"></div>
+          </div>
+          <div id="graph-hint" class="graph-hint">滚轮缩放 · 拖拽节点 · 单击查看关系 · 双击定位</div>
+        </div>
+      </section>
+
+      <!-- ===== 视图：故事流工作台 ===== -->
+      <section id="view-workbench" class="view">
+        <div id="wb">
+          <!-- 左：骨架 + 设定档案 -->
+          <div id="wb-left" class="wb-col">
+            <div class="wb-bar">
+              <select id="wb-novel" class="gp-select" title="选择小说"></select>
+            </div>
+            <div class="wb-section">
+              <div class="wb-sec-title">故事骨架</div>
+              <div id="wb-skeleton" class="wb-tree"></div>
+            </div>
+            <div class="wb-section">
+              <div class="wb-sec-title">设定档案</div>
+              <div id="wb-archive" class="wb-tree"></div>
+            </div>
+          </div>
+
+          <!-- 中：章节 / 拍 编辑 -->
+          <div id="wb-center" class="wb-col">
+            <div id="wb-chapter-head" class="wb-chapter-head">
+              <span id="wb-chapter-title" class="wb-chapter-title">选择左侧章节开始</span>
+              <div class="wb-chapter-actions">
+                <button class="btn" id="wb-add-beat">＋ 添加拍</button>
+                <button class="btn" id="wb-ai-beats" title="用 AI 根据章节目标生成拍">✨ AI 生成拍</button>
+              </div>
+            </div>
+            <div id="wb-beats" class="wb-beats"></div>
+          </div>
+
+          <!-- 右：体检 / 伏笔 / 时间线 / 校验 -->
+          <div id="wb-right" class="wb-col">
+            <div class="wb-section">
+              <div class="wb-sec-title">设定体检</div>
+              <div id="wb-health" class="wb-health"></div>
+            </div>
+            <div class="wb-section">
+              <div class="wb-sec-title">伏笔 <button class="mini-btn" id="wb-add-foreshadow" title="新增伏笔">＋</button></div>
+              <div id="wb-foreshadow" class="wb-foreshadow"></div>
+            </div>
+            <div class="wb-section">
+              <div class="wb-sec-title">时序纪年 <button class="mini-btn" id="wb-add-event" title="新增时序事件">＋</button></div>
+              <div id="wb-timeline" class="wb-timeline"></div>
+            </div>
+            <div class="wb-section">
+              <div class="wb-sec-title">
+                四连续性校验
+                <button class="mini-btn" id="wb-run-check" title="重新校验">⟳</button>
+                <button class="mini-btn" id="wb-ai-audit" title="用 AI 做逻辑审计">✨</button>
+              </div>
+              <div id="wb-checks" class="wb-checks"></div>
+            </div>
           </div>
         </div>
       </section>
+
+      <!-- ===== 视图：剧本 ===== -->
+      <section id="view-script" class="view">
+        <div id="script-wrap">
+          <div id="script-bar" class="script-bar">
+            <select id="script-novel" class="gp-select" title="选择小说"></select>
+            <select id="script-chapter" class="gp-select" title="选择章节">
+              <option value="__all__">全书所有章节</option>
+            </select>
+            <button class="btn" id="btn-script-import" title="从外部导入 TXT 文件转换">📂 导入TXT</button>
+            <input type="file" id="script-file" accept=".txt,text/plain" class="hidden">
+            <span id="script-source-tag" class="script-source-tag hidden"></span>
+            <div class="seg" id="script-mode-seg">
+              <button data-mode="ai" class="active">✨ AI 智能转换</button>
+              <button data-mode="rule">⚡ 快速规则转换</button>
+            </div>
+            <div class="seg" id="script-template-seg" title="剧本格式模板">
+              <button data-template="center" class="active">📝 居中格式</button>
+              <button data-template="left">📋 靠左格式</button>
+            </div>
+            <button class="btn primary" id="btn-script-convert">🎬 开始转换</button>
+            <span class="spacer"></span>
+            <button class="btn" id="btn-script-copy" title="复制剧本文本">📋 复制</button>
+            <button class="btn" id="btn-script-export" title="导出为 TXT">💾 导出TXT</button>
+          </div>
+          <div id="script-drop-zone" class="script-drop-zone">
+            <div class="drop-hint">📥 松开鼠标导入 TXT 文件</div>
+          </div>
+          <div id="script-editor" class="script-editor" contenteditable="true" placeholder="选择小说章节或导入外部 TXT，点击「开始转换」；也可直接将 TXT 文件拖入此处…"></div>
+        </div>
+      </section>
+
+      <!-- ===== 视图：拆书 ===== -->
+      <section id="view-split" class="view">
+        <div id="split-wrap">
+          <!-- 子标签导航 -->
+          <div class="split-tabs" id="split-tabs">
+            <button class="split-tab active" data-tab="import">📂 导入分章</button>
+            <button class="split-tab" data-tab="analyze">🔍 拆文分析</button>
+          </div>
+
+          <!-- 导入分章面板 -->
+          <div id="split-panel-import" class="split-panel active">
+            <div id="split-bar" class="split-bar">
+              <button class="btn primary" id="btn-split-import">📂 选择TXT文件</button>
+              <input type="file" id="split-file" accept=".txt,text/plain" class="hidden">
+              <span class="split-filename" id="split-filename"></span>
+              <span class="spacer"></span>
+              <label class="split-label">分章正则：</label>
+              <input type="text" id="split-regex" class="split-input" value="第[一二三四五六七八九十百千零〇两\\d]+[章回节卷]" placeholder="第X章/第X回">
+              <button class="btn" id="btn-split-detect" title="重新检测章节">🔍 重新检测</button>
+              <button class="btn primary" id="btn-split-create" title="将拆分结果创建为新小说">✨ 创建小说</button>
+            </div>
+            <div id="split-drop" class="split-drop">
+              <div class="split-drop-icon">📥</div>
+              <div class="split-drop-text">将 TXT 文件拖到此处，或点击上方按钮选择文件</div>
+              <div class="split-drop-sub">支持 UTF-8 / GBK 编码，自动识别章节标题</div>
+            </div>
+            <div id="split-result" class="split-result hidden">
+              <div class="split-stats" id="split-stats"></div>
+              <div class="split-list" id="split-list"></div>
+            </div>
+          </div>
+
+          <!-- 拆文分析面板 -->
+          <div id="split-panel-analyze" class="split-panel">
+            <div class="analyze-bar">
+              <select id="analyze-novel" class="gp-select" title="选择小说"></select>
+              <select id="analyze-chapter" class="gp-select" title="选择章节">
+                <option value="__all__">全书所有章节</option>
+              </select>
+              <button class="btn" id="btn-analyze-import" title="导入外部TXT分析">📂 导入TXT</button>
+              <input type="file" id="analyze-file" accept=".txt,text/plain" class="hidden">
+              <span id="analyze-source-tag" class="analyze-source-tag hidden"></span>
+              <div class="seg" id="analyze-mode-seg">
+                <button data-mode="ai" class="active">✨ AI 智能拆解</button>
+                <button data-mode="rule">⚡ 模板拆解</button>
+              </div>
+              <button class="btn primary" id="btn-analyze-run">🔍 开始拆文</button>
+              <span class="spacer"></span>
+              <button class="btn" id="btn-analyze-copy" title="复制拆解报告">📋 复制</button>
+              <button class="btn" id="btn-analyze-export" title="导出为 TXT">💾 导出TXT</button>
+            </div>
+            <!-- 维度选择 -->
+            <div class="analyze-dims" id="analyze-dims">
+              <label class="dim-check"><input type="checkbox" value="structure" checked> 🏗️ 结构骨架</label>
+              <label class="dim-check"><input type="checkbox" value="plot" checked> 📖 剧情概括</label>
+              <label class="dim-check"><input type="checkbox" value="character" checked> 👤 人物分析</label>
+              <label class="dim-check"><input type="checkbox" value="hook" checked> 🪝 开篇钩子</label>
+              <label class="dim-check"><input type="checkbox" value="rhythm" checked> ⚡ 叙事节奏</label>
+              <label class="dim-check"><input type="checkbox" value="emotion" checked> 💫 情绪人设</label>
+              <label class="dim-check"><input type="checkbox" value="style" checked> ✍️ 行文文笔</label>
+              <label class="dim-check"><input type="checkbox" value="technique" checked> ✨ 写法借鉴</label>
+            </div>
+            <div id="analyze-drop-zone" class="analyze-drop-zone">
+              <div class="drop-hint">📥 松开鼠标导入 TXT 文件</div>
+            </div>
+            <div id="analyze-result" class="analyze-result" placeholder="选择小说章节或导入外部TXT，勾选拆解维度，点击「开始拆文」…"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== 视图：AI提示词（漫剧 + 漫画图片） ===== -->
+      <section id="view-comic" class="view">
+        <div class="comic-subtabs">
+          <button class="comic-subtab active" data-subtab="drama">🎬 AI漫剧提示词</button>
+          <button class="comic-subtab" data-subtab="image">🖼️ AI漫画/图片提示词</button>
+        </div>
+
+        <!-- 漫剧提示词面板 -->
+        <div id="comic-drama-panel" class="comic-panel">
+        <div id="comic-wrap">
+          <div id="comic-bar" class="comic-bar">
+            <select id="comic-novel" class="gp-select" title="选择小说"></select>
+            <select id="comic-chapter" class="gp-select" title="选择章节">
+              <option value="__all__">全书所有章节</option>
+            </select>
+            <button class="btn" id="btn-comic-import" title="导入外部TXT">📂 导入TXT</button>
+            <input type="file" id="comic-file" accept=".txt,text/plain" class="hidden">
+            <span id="comic-source-tag" class="comic-source-tag hidden"></span>
+            <div class="seg" id="comic-mode-seg">
+              <button data-mode="ai" class="active">✨ AI 智能生成</button>
+              <button data-mode="rule">⚡ 模板生成</button>
+            </div>
+            <button class="btn primary" id="btn-comic-convert">🎨 生成提示词</button>
+            <span class="spacer"></span>
+            <button class="btn" id="btn-comic-save" title="保存到漫剧库">💾 保存</button>
+            <button class="btn" id="btn-comic-load" title="加载已保存的漫剧提示词">📂 加载</button>
+            <button class="btn" id="btn-comic-copy" title="复制全部提示词">📋 复制</button>
+            <button class="btn" id="btn-comic-export" title="导出为 TXT">📤 导出TXT</button>
+          </div>
+          <div id="comic-drop-zone" class="comic-drop-zone">
+            <div class="drop-hint">📥 松开鼠标导入 TXT 文件</div>
+          </div>
+          <!-- 一句话生成提示词 -->
+          <div class="quick-gen">
+            <div class="quick-gen-label">⚡ 一句话生成提示词</div>
+            <div class="quick-gen-row">
+              <input type="text" id="comic-quick-input" class="quick-gen-input" placeholder="输入一句话描述，如：少年在雨夜酒馆偶遇旧友，随后遭遇黑衣人袭击…">
+              <button class="btn primary" id="btn-comic-quick">✨ 生成</button>
+            </div>
+          </div>
+          <div id="comic-editor" class="comic-editor" contenteditable="false" placeholder="选择小说章节或导入外部TXT，点击「生成提示词」…"></div>
+        </div>
+        </div>
+
+        <!-- 漫画/图片提示词面板 -->
+        <div id="comic-image-panel" class="comic-panel hidden">
+        <div id="img-wrap">
+          <div id="img-bar" class="comic-bar">
+            <select id="img-novel" class="gp-select" title="选择小说"></select>
+            <select id="img-chapter" class="gp-select" title="选择章节">
+              <option value="__all__">全书所有章节</option>
+            </select>
+            <button class="btn" id="btn-img-import" title="导入外部TXT">📂 导入TXT</button>
+            <input type="file" id="img-file" accept=".txt,text/plain" class="hidden">
+            <span id="img-source-tag" class="comic-source-tag hidden"></span>
+            <div class="seg" id="img-mode-seg">
+              <button data-mode="ai" class="active">✨ AI 智能生成</button>
+              <button data-mode="rule">⚡ 模板生成</button>
+            </div>
+            <div class="seg" id="img-style-seg" title="图片风格">
+              <button data-style="anime" class="active">日漫</button>
+              <button data-style="guoman">国漫</button>
+              <button data-style="realistic">写实</button>
+              <button data-style="oil">油画</button>
+              <button data-style="watercolor">水彩</button>
+            </div>
+            <button class="btn primary" id="btn-img-convert">🎨 生成提示词</button>
+            <span class="spacer"></span>
+            <button class="btn" id="btn-img-save" title="保存到漫画图库">💾 保存</button>
+            <button class="btn" id="btn-img-load" title="加载已保存的图片提示词">📂 加载</button>
+            <button class="btn" id="btn-img-copy" title="复制全部提示词">📋 复制</button>
+            <button class="btn" id="btn-img-export" title="导出为 TXT">📤 导出TXT</button>
+          </div>
+          <div id="img-drop-zone" class="comic-drop-zone">
+            <div class="drop-hint">📥 松开鼠标导入 TXT 文件</div>
+          </div>
+          <!-- 一句话生成提示词 -->
+          <div class="quick-gen">
+            <div class="quick-gen-label">⚡ 一句话生成提示词</div>
+            <div class="quick-gen-row">
+              <input type="text" id="img-quick-input" class="quick-gen-input" placeholder="输入一句话描述，如：银发少女站在樱花树下，微风拂过，花瓣飘落…">
+              <button class="btn primary" id="btn-img-quick">✨ 生成</button>
+            </div>
+          </div>
+          <div id="img-editor" class="comic-editor" contenteditable="false" placeholder="选择小说章节或导入外部TXT，点击「生成提示词」…"></div>
+        </div>
+        </div>
+      </section>
+
+      <!-- ===== 视图：图片识别 OCR ===== -->
+      <section id="view-ocr" class="view">
+        <div id="ocr-wrap">
+          <div id="ocr-bar" class="comic-bar">
+            <div class="seg" id="ocr-type-seg" title="识别类型">
+              <button data-type="both" class="active">📝 全部</button>
+              <button data-type="text">🔤 仅文字</button>
+              <button data-type="describe">🖼️ 仅画面</button>
+            </div>
+            <div class="seg" id="ocr-mode-seg" title="识别引擎">
+              <button data-mode="ai" class="active">✨ AI 视觉理解</button>
+              <button data-mode="tesseract">🔤 本地OCR</button>
+            </div>
+            <button class="btn" id="btn-ocr-upload">📂 选择图片</button>
+            <input type="file" id="ocr-file" accept="image/*" multiple class="hidden">
+            <button class="btn primary" id="btn-ocr-run" disabled>🔍 开始识别</button>
+            <span class="spacer"></span>
+            <button class="btn" id="btn-ocr-copy" title="复制全部文字">📋 复制</button>
+            <button class="btn" id="btn-ocr-save" title="保存为小说章节">📖 存为章节</button>
+            <button class="btn" id="btn-ocr-export" title="导出为 TXT">📤 导出TXT</button>
+            <button class="btn danger" id="btn-ocr-clear" title="清空">🗑️ 清空</button>
+          </div>
+
+          <div class="ocr-main">
+            <div class="ocr-left">
+              <div id="ocr-drop-zone" class="ocr-drop-zone">
+                <div class="ocr-drop-icon">📥</div>
+                <div class="ocr-drop-text">拖拽图片到此处，或点击「选择图片」</div>
+                <div class="ocr-drop-hint">支持 JPG / PNG / WEBP / BMP，可多选</div>
+              </div>
+              <div id="ocr-preview" class="ocr-preview hidden">
+                <div class="ocr-preview-title">图片预览（<span id="ocr-img-count">0</span>张）</div>
+                <div id="ocr-preview-list" class="ocr-preview-list"></div>
+              </div>
+            </div>
+            <div class="ocr-right">
+              <div class="ocr-result-header">
+                <span>识别结果</span>
+                <span id="ocr-result-stats" class="ocr-result-stats"></span>
+              </div>
+              <div id="ocr-result" class="ocr-result" contenteditable="true" placeholder="识别后的文字将显示在这里，可直接编辑…"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
     </main>
 
     <footer id="statusbar">
@@ -89,7 +426,7 @@
   <div id="modal-mask" class="hidden">
     <div id="settings-modal" class="modal">
       <div class="modal-head">
-        <span>⚙️ 界面设置</span>
+        <span>⚙️ 设置</span>
         <button class="modal-close" id="modal-close">✕</button>
       </div>
       <div class="modal-body">
@@ -124,12 +461,113 @@
           <div id="bg-preview" class="bg-preview"></div>
         </div>
 
+        <div class="form-group">
+          <label>🤖 AI 配置（可选，用于生成拍 / 逻辑审计，支持 OpenAI 兼容接口）</label>
+          <input type="text" id="set-ai-base" class="text-input" placeholder="API 地址，如 https://api.openai.com/v1">
+          <input type="text" id="set-ai-key" class="text-input" placeholder="API Key（仅保存在本地）">
+          <input type="text" id="set-ai-model" class="text-input" placeholder="模型名，如 gpt-4o-mini / deepseek-chat">
+        </div>
+
       </div>
       <div class="modal-foot">
         <button id="btn-reset" class="btn">恢复默认</button>
         <span class="spacer"></span>
         <button id="btn-settings-cancel" class="btn">取消</button>
         <button id="btn-settings-ok" class="btn primary">应用</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 导入 TXT 拆书弹窗 -->
+  <div id="import-mask" class="hidden">
+    <div id="import-modal" class="modal">
+      <div class="modal-head">
+        <span>📥 导入 TXT 拆书</span>
+        <button class="modal-close" id="import-close">✕</button>
+      </div>
+      <div class="modal-body">
+
+        <div class="form-group">
+          <label>选择 TXT 文件</label>
+          <div class="bg-row">
+            <button id="btn-pick-txt" class="btn primary">📄 选择文件…</button>
+            <span id="import-file-name" class="import-fname">未选择文件</span>
+          </div>
+          <input type="file" id="import-file" accept=".txt,text/plain" class="hidden">
+        </div>
+
+        <div class="form-group">
+          <label>小说名称（作为新建小说名）</label>
+          <input type="text" id="import-novel-name" class="text-input" placeholder="留空则使用文件名">
+        </div>
+
+        <div class="form-group">
+          <label>文本编码</label>
+          <div class="seg" id="seg-encoding">
+            <button data-enc="auto">自动检测</button>
+            <button data-enc="utf-8">UTF-8</button>
+            <button data-enc="gbk">GBK</button>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>拆分规则</label>
+          <div class="seg" id="seg-split-mode">
+            <button data-mode="auto" class="active">自动识别卷/章</button>
+            <button data-mode="chapter">仅按章拆分</button>
+            <button data-mode="none">不拆分（单章）</button>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>预览</label>
+          <div id="import-preview" class="import-preview">请先选择 TXT 文件…</div>
+        </div>
+
+      </div>
+      <div class="modal-foot">
+        <span class="spacer"></span>
+        <button id="import-cancel" class="btn">取消</button>
+        <button id="import-ok" class="btn primary" disabled>开始导入</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 小说转剧本弹窗 -->
+  <div id="script-mask" class="hidden">
+    <div id="script-modal" class="modal">
+      <div class="modal-head">
+        <span>🎬 小说转剧本</span>
+        <button class="modal-close" id="script-close">✕</button>
+      </div>
+      <div class="modal-body">
+
+        <div class="form-group">
+          <label>来源章节</label>
+          <div id="script-source" class="script-source">—</div>
+        </div>
+
+        <div class="form-group">
+          <label>转换方式</label>
+          <div class="seg" id="seg-script-mode">
+            <button data-mode="rule" class="active">📝 规则识别</button>
+            <button data-mode="ai">🤖 AI 智能转换</button>
+          </div>
+          <div class="script-hint" id="script-hint">规则识别：自动提取对白、说话人、动作描写和场景划分，无需联网。</div>
+        </div>
+
+        <div class="form-group">
+          <label>剧本结果 <span id="script-status" class="script-status"></span></label>
+          <textarea id="script-result" class="script-result" placeholder="点击「开始转换」生成剧本…" spellcheck="false"></textarea>
+        </div>
+
+      </div>
+      <div class="modal-foot">
+        <button id="script-convert" class="btn primary">开始转换</button>
+        <span class="spacer"></span>
+        <button id="script-copy" class="btn" disabled>复制全文</button>
+        <button id="script-save" class="btn" disabled>保存为剧本节点</button>
+        <button id="script-cancel" class="btn">关闭</button>
       </div>
     </div>
   </div>
@@ -145,6 +583,26 @@
     <div id="split-body"></div>
   </div>
 
+  <!-- 通用确认/输入弹窗 -->
+  <div id="popup-mask" class="hidden">
+    <div id="popup" class="modal">
+      <div class="modal-head"><span id="popup-title"></span><button class="modal-close" id="popup-close">✕</button></div>
+      <div class="modal-body" id="popup-body"></div>
+      <div class="modal-foot">
+        <span class="spacer"></span>
+        <button id="popup-cancel" class="btn">取消</button>
+        <button id="popup-ok" class="btn primary">确定</button>
+      </div>
+    </div>
+  </div>
+
   <script src="/static/app.js"></script>
+  <script src="/static/graph.js"></script>
+  <script src="/static/workbench.js"></script>
+  <script src="/static/script.js"></script>
+  <script src="/static/split.js"></script>
+  <script src="/static/comic.js"></script>
+  <script src="/static/comic_image.js"></script>
+  <script src="/static/ocr.js"></script>
 </body>
 </html>
