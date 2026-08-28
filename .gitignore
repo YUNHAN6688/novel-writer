@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+
+# Build
+build/
+dist/
+*.spec.bak
+*.egg-info/
+
+# Data (local user data, don't upload)
+novel_data.json
+settings.json
+comic_drama.json
+comic_image.json
+*.log
+app_run.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Uploads
+static/uploads/
