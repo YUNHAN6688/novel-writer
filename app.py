@@ -17,7 +17,6 @@ import threading
 import uuid
 import webbrowser
 import sys
-import base64
 import urllib.request
 import urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -50,6 +49,7 @@ DEFAULT_SETTINGS = {
     "ai_base_url": "",
     "ai_api_key": "",
     "ai_model": "",
+    "export_dir": "",
 }
 
 DEFAULT_DATA = {"children": []}
@@ -95,6 +95,64 @@ def load_comic(kind):
 def save_comic(kind, data):
     path = COMIC_DRAMA_FILE if kind == "drama" else COMIC_IMAGE_FILE
     save_json(path, data)
+
+
+def choose_export_dir():
+    """打开文件夹选择对话框，返回选择的路径。"""
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        selected = filedialog.askdirectory(title="选择导出文件夹")
+        root.destroy()
+        return selected or ""
+    except Exception as e:
+        return ""
+
+
+def save_export_file(filename, content, subdir=""):
+    """保存导出文件到设置的导出目录。
+    filename: 文件名（含扩展名）
+    content: 文件内容
+    subdir: 子目录名（用于文件夹批量导出时创建子目录）
+    返回: (success, message, filepath)
+    """
+    settings = load_settings()
+    export_dir = settings.get("export_dir", "") or WRITABLE_DIR
+    # 确保导出目录存在
+    try:
+        if not os.path.exists(export_dir):
+            os.makedirs(export_dir, exist_ok=True)
+    except Exception as e:
+        return False, f"无法创建导出目录：{e}", ""
+    # 子目录
+    target_dir = export_dir
+    if subdir:
+        target_dir = os.path.join(export_dir, subdir)
+        try:
+            os.makedirs(target_dir, exist_ok=True)
+        except Exception as e:
+            return False, f"无法创建子目录：{e}", ""
+    # 处理文件名中的非法字符
+    safe_name = "".join(c for c in filename if c not in '\\/:*?"<>|').strip()
+    if not safe_name:
+        safe_name = "未命名"
+    filepath = os.path.join(target_dir, safe_name)
+    # 如果文件已存在，添加序号
+    if os.path.exists(filepath):
+        base, ext = os.path.splitext(safe_name)
+        i = 1
+        while os.path.exists(os.path.join(target_dir, f"{base}_{i}{ext}")):
+            i += 1
+        filepath = os.path.join(target_dir, f"{base}_{i}{ext}")
+    try:
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(content)
+        return True, "导出成功", filepath
+    except Exception as e:
+        return False, f"保存失败：{e}", ""
 
 
 MIME = {
@@ -202,8 +260,6 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_upload()
         elif path == "/api/ai/chat":
             self._handle_ai_chat()
-        elif path == "/api/ocr":
-            self._handle_ocr()
         elif path == "/api/comic/drama":
             self._handle_comic_save("drama")
         elif path == "/api/comic/image":
@@ -212,6 +268,19 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_comic_delete("drama", path)
         elif path.startswith("/api/comic/image/"):
             self._handle_comic_delete("image", path)
+        elif path == "/api/choose-export-dir":
+            selected = choose_export_dir()
+            self._json({"ok": True, "path": selected})
+        elif path == "/api/export":
+            try:
+                payload = json.loads(self._read_body().decode("utf-8"))
+                filename = payload.get("filename", "导出.txt")
+                content = payload.get("content", "")
+                subdir = payload.get("subdir", "")
+                ok, msg, filepath = save_export_file(filename, content, subdir)
+                self._json({"ok": ok, "message": msg, "path": filepath})
+            except Exception as e:
+                self._json({"ok": False, "error": str(e)}, 500)
         else:
             self._send(404, b"Not Found")
 
@@ -308,210 +377,6 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok": False, "error": f"上游返回 {e.code}: {err[:500]}"}, 502)
         except Exception as e:
             self._json({"ok": False, "error": "请求失败: " + str(e)}, 502)
-
-    def _handle_ocr(self):
-        try:
-            self._handle_ocr_inner()
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            try:
-                self._json({"ok": False, "error": "OCR 处理异常: " + str(e)}, 500)
-            except Exception:
-                pass
-
-    def _handle_ocr_inner(self):
-        """图片理解（OCR + 画面描述）。
-        识别类型 mode：
-          text     — 仅文字识别
-          describe — 仅画面描述（人物动作、神态、环境、氛围）
-          both     — 文字 + 画面描述（默认）
-        支持两种上传：
-          1. multipart 上传图片文件（含 mode 字段）
-          2. JSON body {"image": "base64...", "mime": "image/png", "mode": "both"}
-        """
-        ctype = self.headers.get("Content-Type", "")
-        image_b64 = ""
-        mime = "image/jpeg"
-        ocr_mode = "both"
-
-        if "multipart/form-data" in ctype:
-            # 从 multipart 中提取图片和 mode
-            boundary = None
-            for part in ctype.split(";"):
-                p = part.strip()
-                if p.startswith("boundary="):
-                    boundary = p[len("boundary="):].strip('"')
-            body = self._read_body()
-            if not boundary:
-                self._json({"ok": False, "error": "no boundary"}, 400)
-                return
-            sep = ("--" + boundary).encode()
-            found = False
-            for part in body.split(sep):
-                head_end = part.find(b"\r\n\r\n")
-                if head_end < 0:
-                    continue
-                head = part[:head_end].decode("utf-8", "ignore")
-                content = part[head_end + 4:]
-                if content.endswith(b"\r\n"):
-                    content = content[:-2]
-                # 提取 mode 字段
-                if 'name="mode"' in head and "filename=" not in head:
-                    try:
-                        val = content.decode("utf-8", "ignore").strip()
-                        if val in ("text", "describe", "both"):
-                            ocr_mode = val
-                    except Exception:
-                        pass
-                    continue
-                # 提取图片文件
-                if b"filename=" in part or 'name="image"' in head or 'name="file"' in head:
-                    for line in head.split("\r\n"):
-                        if "Content-Type:" in line:
-                            mime = line.split("Content-Type:")[1].strip().split(";")[0].strip()
-                    if content:
-                        image_b64 = base64.b64encode(content).decode("ascii")
-                        found = True
-            if not found:
-                self._json({"ok": False, "error": "未找到图片文件"}, 400)
-                return
-        else:
-            # JSON 模式
-            try:
-                payload = json.loads(self._read_body().decode("utf-8"))
-                image_b64 = (payload.get("image") or "").strip()
-                mime = payload.get("mime") or "image/jpeg"
-                m = payload.get("mode") or "both"
-                if m in ("text", "describe", "both"):
-                    ocr_mode = m
-                if image_b64.startswith("data:"):
-                    header, _, b64 = image_b64.partition(",")
-                    if ";" in header:
-                        mime = header.split(";")[0].replace("data:", "")
-                    image_b64 = b64
-            except Exception:
-                self._json({"ok": False, "error": "invalid json"}, 400)
-                return
-
-        if not image_b64:
-            self._json({"ok": False, "error": "图片数据为空"}, 400)
-            return
-
-        # 检查 AI 配置
-        s = load_settings()
-        base_url = (s.get("ai_base_url") or "").strip().rstrip("/")
-        api_key = (s.get("ai_api_key") or "").strip()
-        model = (s.get("ai_model") or "").strip()
-        if not base_url or not api_key or not model:
-            self._json({"ok": False, "error": "AI 未配置：请在设置中填写 API 地址、Key 和模型（需支持视觉识别的模型）", "need_ai": True}, 400)
-            return
-
-        # 构建视觉识别请求（OpenAI 兼容格式）
-        data_url = f"data:{mime};base64,{image_b64}"
-
-        # 根据识别类型构建提示词
-        if ocr_mode == "text":
-            prompt_text = "请识别并提取这张图片中的所有文字内容，按原文排版输出。如果图片中有手写文字也尽量识别。只输出识别到的文字，不要添加解释。"
-        elif ocr_mode == "describe":
-            prompt_text = """请详细描述这张图片的画面内容，按以下结构输出：
-
-【画面概述】
-一句话概括图片的整体内容。
-
-【人物分析】
-- 出场人物：列出图片中出现的人物（如有）
-- 外貌特征：发型、发色、瞳色、服装、配饰等
-- 动作姿态：人物正在做什么动作（站立/行走/奔跑/坐下/打斗/拥抱等）
-- 神态表情：人物的面部表情和情绪（微笑/愤怒/悲伤/惊讶/冷漠/沉思等）
-- 人物关系：人物之间的互动关系（如有多人）
-
-【环境场景】
-- 地点：室内/室外，具体场景（街道/酒馆/森林/宫殿/战场等）
-- 时间：白天/夜晚/清晨/黄昏
-- 天气：晴朗/下雨/下雪/有雾等
-- 背景元素：建筑、植物、道具、装饰物等细节
-
-【光影氛围】
-- 光线：光源方向、明暗对比、光影效果
-- 色调：整体色彩倾向（暖色调/冷色调/高饱和/低饱和）
-- 氛围：整体情绪氛围（紧张/温馨/神秘/悲壮/欢快等）
-
-【构图镜头】
-- 景别：特写/近景/中景/全景/远景
-- 视角：平视/俯视/仰视/侧视
-- 构图：主体位置、画面平衡、前后景关系
-
-请基于图片实际内容描述，不要编造。如果图片中没有人物，人物分析部分写"无人物"。"""
-        else:  # both
-            prompt_text = """请对这张图片进行完整的图片理解，按以下结构输出：
-
-【文字识别】
-提取图片中所有可见的文字内容（包括招牌、字幕、书籍、信件等），按原文排版输出。如果没有文字，写"无可见文字"。
-
-【画面概述】
-一句话概括图片的整体内容。
-
-【人物分析】
-- 出场人物：列出图片中出现的人物（如有）
-- 外貌特征：发型、发色、瞳色、服装、配饰等
-- 动作姿态：人物正在做什么动作（站立/行走/奔跑/坐下/打斗/拥抱等）
-- 神态表情：人物的面部表情和情绪（微笑/愤怒/悲伤/惊讶/冷漠/沉思等）
-- 人物关系：人物之间的互动关系（如有多人）
-
-【环境场景】
-- 地点：室内/室外，具体场景（街道/酒馆/森林/宫殿/战场等）
-- 时间：白天/夜晚/清晨/黄昏
-- 天气：晴朗/下雨/下雪/有雾等
-- 背景元素：建筑、植物、道具、装饰物等细节
-
-【光影氛围】
-- 光线：光源方向、明暗对比、光影效果
-- 色调：整体色彩倾向（暖色调/冷色调/高饱和/低饱和）
-- 氛围：整体情绪氛围（紧张/温馨/神秘/悲壮/欢快等）
-
-【构图镜头】
-- 景别：特写/近景/中景/全景/远景
-- 视角：平视/俯视/仰视/侧视
-- 构图：主体位置、画面平衡、前后景关系
-
-请基于图片实际内容描述，不要编造。如果图片中没有人物，人物分析部分写"无人物"。"""
-
-        body = json.dumps({
-            "model": model,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt_text},
-                        {"type": "image_url", "image_url": {"url": data_url}},
-                    ],
-                }
-            ],
-            "temperature": 0.3,
-            "max_tokens": 8192,
-            "stream": False,
-        }, ensure_ascii=False).encode("utf-8")
-
-        url = base_url + "/chat/completions"
-        req = urllib.request.Request(url, data=body, method="POST")
-        req.add_header("Content-Type", "application/json")
-        req.add_header("Authorization", "Bearer " + api_key)
-        try:
-            with urllib.request.urlopen(req, timeout=120) as resp:
-                raw = resp.read().decode("utf-8", "ignore")
-            data = json.loads(raw)
-            content = ""
-            try:
-                content = data["choices"][0]["message"]["content"]
-            except Exception:
-                content = raw
-            self._json({"ok": True, "text": content, "model": model, "mode": ocr_mode})
-        except urllib.error.HTTPError as e:
-            err = e.read().decode("utf-8", "ignore")
-            self._json({"ok": False, "error": f"AI 接口返回 {e.code}: {err[:500]}"}, 502)
-        except Exception as e:
-            self._json({"ok": False, "error": "识别失败: " + str(e)}, 502)
 
     def _handle_comic_save(self, kind):
         """保存一组漫剧/漫画图片提示词。body: {"name": "...", "prompts": [...]}"""
