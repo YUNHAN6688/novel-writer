@@ -50,9 +50,16 @@
         result.volumes.push(vol);
       } else if (ch.type === "outline") {
         result.outline = ch;
-        (ch.children || []).forEach(e => {
-          (result.entities[e.type] = result.entities[e.type] || []).push(e);
-        });
+        // 递归收集：大纲下可能有类型文件夹（group），需要进入文件夹收集实际文档
+        (function collect(list) {
+          (list || []).forEach(e => {
+            if (e.type === "group") {
+              collect(e.children);
+            } else {
+              (result.entities[e.type] = result.entities[e.type] || []).push(e);
+            }
+          });
+        })(ch.children);
       }
     });
     return result;
@@ -362,7 +369,9 @@
       let outline = (novel.children || []).find(c => c.type === "outline");
       if (!outline) { outline = makeNode("outline", "大纲"); novel.children.push(outline); }
       const node = makeNode("foreshadow", name.trim());
-      (outline.children = outline.children || []).push(node);
+      // 自动归入对应类型文件夹
+      const group = findOrCreateGroup(outline, "foreshadow");
+      group.children.push(node);
       markDirty(); saveData(); renderArchive(); renderForeshadow(); renderHealth(); runChecks();
     });
   }

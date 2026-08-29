@@ -23,11 +23,16 @@ const TYPE_META = {
   inspire:     { label: "灵感",     color: "#FFC000" },
   storyline:   { label: "故事线",   color: "#C5E0B4" },
   script:      { label: "剧本",     color: "#e91e63" },
+  group:       { label: "文件夹",   color: "#888888" },
 };
+/* 大纲下需要被类型文件夹收录的文档类型 */
+const GROUPABLE_TYPES = ["character", "location", "faction", "item", "event",
+                         "resource", "concept", "foreshadow", "fact", "rule",
+                         "relation", "inspire", "storyline"];
 const CHILDREN_ALLOWED = {
   novel: ["volume", "outline"],
-  outline: ["character", "location", "faction", "item", "event", "resource",
-            "concept", "foreshadow", "fact", "rule", "relation", "inspire", "storyline"],
+  outline: ["group"],
+  group: GROUPABLE_TYPES,
   volume: ["chapter", "script"],
   chapter: ["beat", "script"],
   beat: [],
@@ -67,6 +72,9 @@ let nodeSeq = 0;
 let tabs = [];               // 打开的编辑 tab {key,node,head,pane,body}
 let activeKey = null;
 let dirty = false;
+let autoSaveTimer = null;    // 防抖自动保存定时器
+const AUTO_SAVE_DELAY = 2000; // 输入停止 2 秒后自动保存
+const MAX_HISTORY = 20;       // 每个节点保留的历史版本数
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
@@ -152,6 +160,48 @@ function migrateOutlines() {
 }
 
 /* ==================================================================
+ * 数据迁移：大纲下的文档自动归入类型文件夹
+ * 确保：大纲下的角色、地点等文档都放在对应类型的文件夹里
+ * ================================================================== */
+function migrateGroups() {
+  if (!data || !data.children) return;
+  let changed = false;
+  (function walk(list) {
+    for (const n of list) {
+      if (n.type === "outline" && n.children) {
+        // 收集直接挂在大纲下的可分组类型节点
+        const direct = n.children.filter(c => GROUPABLE_TYPES.includes(c.type));
+        if (direct.length) {
+          // 按类型分组，移到对应文件夹
+          const byType = {};
+          direct.forEach(c => {
+            (byType[c.type] = byType[c.type] || []).push(c);
+          });
+          Object.keys(byType).forEach(type => {
+            const group = findOrCreateGroup(n, type);
+            byType[type].forEach(c => {
+              // 从大纲直接子级中移除
+              n.children = n.children.filter(x => x !== c);
+              group.children.push(c);
+            });
+          });
+          changed = true;
+        }
+      }
+      if (n.children) walk(n.children);
+    }
+  })(data.children);
+
+  // 清理空文件夹
+  if (cleanupAllEmptyGroups()) changed = true;
+
+  if (changed) {
+    saveData();
+    setStatus("已自动整理大纲文档到类型文件夹");
+  }
+}
+
+/* ==================================================================
  * 初始化
  * ================================================================== */
 async function init() {
@@ -163,6 +213,10 @@ async function init() {
   settings = Object.assign({ theme: "day", font_size: 14, font_color: "#222222", background_image: "" }, s || {});
   // 数据迁移：确保大纲只在小说下面，每本小说有且仅有一个大纲
   migrateOutlines();
+  // 数据迁移：大纲下的文档自动归入类型文件夹
+  migrateGroups();
+  // 清理回收站中超过 3 天的内容
+  cleanupExpiredTrash();
   applyTheme(settings.theme);
   applyBg();
   syncSettingsUI();
@@ -211,23 +265,28 @@ function renderNode(node) {
     twist.textContent = isExpanded(node) ? "▾" : "▸";
   });
 
-  // 类型圆点 + 标签
+  // 类型圆点 + 标签（文件夹类型用文件夹图标）
   const dot = document.createElement("span");
-  dot.className = "type-dot";
-  dot.style.background = meta.color;
+  if (node.type === "group") {
+    dot.className = "type-folder";
+    dot.textContent = "📁";
+  } else {
+    dot.className = "type-dot";
+    dot.style.background = meta.color;
+  }
   const label = document.createElement("span");
   label.className = "label";
   label.textContent = node.name || "";
   const metaTxt = document.createElement("span");
   metaTxt.className = "meta";
-  metaTxt.textContent = meta.label;
+  metaTxt.textContent = node.type === "group" ? "" : meta.label;
 
-  // 分屏按钮（卷只是标题，不提供文本编辑）
+  // 分屏按钮（卷和文件夹不提供文本编辑）
   const splitBtn = document.createElement("button");
   splitBtn.className = "split-btn";
   splitBtn.textContent = "⧉";
   splitBtn.title = "分屏打开";
-  if (node.type === "volume") splitBtn.style.display = "none";
+  if (node.type === "volume" || node.type === "group") splitBtn.style.display = "none";
   splitBtn.addEventListener("click", (e) => {
     e.stopPropagation();
     openSplit(node);
@@ -253,10 +312,10 @@ function renderNode(node) {
     syncSelection();
   });
 
-  // 双击打开编辑（卷只是标题，不打开正文编辑器，改为切换展开）
+  // 双击打开编辑（卷和文件夹只是标题，不打开正文编辑器，改为切换展开）
   item.addEventListener("dblclick", () => {
     if (node.type === "storyline" || node.type === "relation") openTreeDiagram(node);
-    else if (node.type === "volume") {
+    else if (node.type === "volume" || node.type === "group") {
       setExpanded(node, !isExpanded(node));
       renderTree();
     }
@@ -295,6 +354,33 @@ function renderNode(node) {
       const hasOutline = (node.children || []).some(c => c.type === "outline");
       if (hasOutline) { setStatus("该小说已有大纲，每本小说只能有一个大纲"); return; }
     }
+    // 文件夹不允许拖入不匹配的类型，也不允许拖入其他文件夹
+    if (node.type === "group") {
+      if (src.type === "group") { setStatus("文件夹不能嵌套"); return; }
+      if (src.type !== node.group_type) {
+        // 类型不匹配时，转到文件夹所在的大纲下，自动归入对应文件夹
+        const outline = findParent(data, node);
+        if (outline && outline.type === "outline" && GROUPABLE_TYPES.includes(src.type)) {
+          removeNode(data, src);
+          const targetGroup = findOrCreateGroup(outline, src.type);
+          targetGroup.children.push(src);
+          cleanupAllEmptyGroups();
+          markDirty(); saveData(); renderTree();
+          return;
+        }
+        setStatus(`该文件夹只收录${TYPE_META[node.group_type].label}类型`);
+        return;
+      }
+    }
+    // 大纲下拖入可分组类型文档时，自动归入对应文件夹
+    if (node.type === "outline" && GROUPABLE_TYPES.includes(src.type)) {
+      removeNode(data, src);
+      const targetGroup = findOrCreateGroup(node, src.type);
+      targetGroup.children.push(src);
+      cleanupAllEmptyGroups();
+      markDirty(); saveData(); renderTree();
+      return;
+    }
     const allowed = CHILDREN_ALLOWED[node.type] || [];
     if (allowed.includes(src.type)) {
       removeNode(data, src);
@@ -305,6 +391,7 @@ function renderNode(node) {
       removeNode(data, src);
       insertBefore(data, src, node);
     }
+    cleanupAllEmptyGroups();
     markDirty();
     saveData();
     renderTree();
@@ -372,8 +459,14 @@ function autoName(node, type) {
   if (type === "beat") return `拍 ${sibs.length + 1}`;
   return `${meta.label}${sibs.length + 1}`;
 }
-function makeNode(type, name) {
+function makeNode(type, name, opts) {
+  opts = opts || {};
   const base = { type, name };
+  if (type === "group") {
+    base.group_type = opts.group_type || "";
+    base.children = [];
+    return base;
+  }
   if (type === "storyline" || type === "relation") base.tree_data = [];
   else if (type === "character" || type === "inspire") base.note = "";
   else base.content = "";
@@ -397,12 +490,49 @@ function createNovel() {
   markDirty(); saveData(); renderTree();
   setStatus("已新建小说：" + node.name + "（含默认大纲）");
 }
+/* 在大纲下查找或创建指定类型的文件夹 */
+function findOrCreateGroup(outlineNode, type) {
+  const groups = (outlineNode.children || []).filter(c => c.type === "group" && c.group_type === type);
+  if (groups.length) return groups[0];
+  const group = makeNode("group", TYPE_META[type].label, { group_type: type });
+  (outlineNode.children = outlineNode.children || []).push(group);
+  return group;
+}
+/* 清理空文件夹：如果文件夹下没有子节点，则删除文件夹 */
+function cleanupEmptyGroups(outlineNode) {
+  if (!outlineNode || !outlineNode.children) return;
+  const before = outlineNode.children.length;
+  outlineNode.children = outlineNode.children.filter(c => {
+    if (c.type === "group" && (!c.children || c.children.length === 0)) return false;
+    return true;
+  });
+  return outlineNode.children.length !== before;
+}
+/* 遍历整棵树，清理所有空文件夹 */
+function cleanupAllEmptyGroups() {
+  let changed = false;
+  (function walk(list) {
+    for (const n of list) {
+      if (n.type === "outline") {
+        if (cleanupEmptyGroups(n)) changed = true;
+      }
+      if (n.children) walk(n.children);
+    }
+  })(data.children || []);
+  return changed;
+}
 function createChild(node, type) {
-  const name = prompt(`请输入${TYPE_META[type].label}名称（留空自动命名）`, autoName(node, type));
+  // 大纲下新建可分组类型文档时，自动找/建对应类型文件夹
+  let parent = node;
+  if (node.type === "outline" && GROUPABLE_TYPES.includes(type)) {
+    parent = findOrCreateGroup(node, type);
+  }
+  const name = prompt(`请输入${TYPE_META[type].label}名称（留空自动命名）`, autoName(parent, type));
   if (name === null) return;
-  const child = makeNode(type, name || autoName(node, type));
-  (node.children = node.children || []).push(child);
-  node._expanded = true;
+  const child = makeNode(type, name || autoName(parent, type));
+  (parent.children = parent.children || []).push(child);
+  parent._expanded = true;
+  if (node.type === "outline") node._expanded = true;
   markDirty(); saveData(); renderTree();
 }
 function renameNode(node) {
@@ -412,20 +542,356 @@ function renameNode(node) {
   markDirty(); saveData(); renderTree();
   refreshTabTitle(node);
 }
-function deleteNode(node) {
-  const kids = (node.children || []).length;
-  const msg = kids ? `确定删除【${node.name}】及其 ${kids} 个子节点？` : `确定删除【${node.name}】？`;
-  if (!confirm(msg)) return;
+/* ==================================================================
+ * 回收站
+ * ================================================================== */
+const TRASH_TTL = 3 * 24 * 60 * 60 * 1000; // 回收站保留 3 天
+
+/* 将节点移入回收站（不直接删除） */
+function moveToTrash(node) {
+  if (!data.trash) data.trash = [];
+  // 先记录原父节点类型（移除后就找不到了）
+  const parent = findParent(data, node);
+  // 从树中移除
   removeNode(data, node);
   closeTab(node);
+  // 剥离运行时临时字段，深拷贝后存入回收站
+  const clone = JSON.parse(JSON.stringify(node));
+  (function strip(n) {
+    delete n._id; delete n._expanded;
+    (n.children || []).forEach(strip);
+  })(clone);
+  data.trash.push({
+    node: clone,
+    deleted_at: Date.now(),
+    original_parent_type: parent ? parent.type : null,
+  });
+}
+
+/* 从回收站恢复节点 */
+function restoreFromTrash(index) {
+  if (!data.trash || !data.trash[index]) return false;
+  const item = data.trash[index];
+  const node = item.node;
+  // 重新分配运行时 ID
+  (function reid(n) {
+    delete n._id; getNodeId(n);
+    (n.children || []).forEach(reid);
+  })(node);
+
+  // 根据原父节点类型决定恢复位置
+  const pType = item.original_parent_type;
+  let placed = false;
+
+  if (pType === "novel" || node.type === "novel") {
+    // 小说节点恢复到根目录
+    (data.children = data.children || []).push(node);
+    placed = true;
+  } else if (pType === "outline" || GROUPABLE_TYPES.includes(node.type)) {
+    // 大纲下的文档恢复到第一本小说的大纲下（自动归入文件夹）
+    const novel = (data.children || []).find(c => c.type === "novel");
+    if (novel) {
+      let outline = (novel.children || []).find(c => c.type === "outline");
+      if (!outline) {
+        outline = makeNode("outline", "大纲");
+        novel.children = novel.children || [];
+        novel.children.unshift(outline);
+      }
+      const group = findOrCreateGroup(outline, node.type);
+      group.children.push(node);
+      placed = true;
+    }
+  } else if (pType === "volume" || node.type === "volume") {
+    // 卷恢复到第一本小说下
+    const novel = (data.children || []).find(c => c.type === "novel");
+    if (novel) {
+      (novel.children = novel.children || []).push(node);
+      placed = true;
+    }
+  } else if (pType === "chapter" || node.type === "chapter") {
+    // 章恢复到第一本小说的第一卷下
+    const novel = (data.children || []).find(c => c.type === "novel");
+    const vol = novel ? (novel.children || []).find(c => c.type === "volume") : null;
+    if (vol) {
+      (vol.children = vol.children || []).push(node);
+      placed = true;
+    }
+  } else if (pType === "group") {
+    // 原来在文件夹里的，恢复到对应类型文件夹
+    const novel = (data.children || []).find(c => c.type === "novel");
+    const outline = novel ? (novel.children || []).find(c => c.type === "outline") : null;
+    if (outline) {
+      const group = findOrCreateGroup(outline, node.type);
+      group.children.push(node);
+      placed = true;
+    }
+  }
+
+  if (!placed) {
+    // 兜底：恢复到根目录
+    (data.children = data.children || []).push(node);
+  }
+
+  // 从回收站移除
+  data.trash.splice(index, 1);
+  cleanupAllEmptyGroups();
+  markDirty(); saveData(); renderTree();
+  return true;
+}
+
+/* 永久删除回收站中的单个项目 */
+function purgeTrashItem(index) {
+  if (!data.trash || !data.trash[index]) return;
+  data.trash.splice(index, 1);
+  markDirty(); saveData();
+}
+
+/* 清空回收站 */
+function emptyTrash() {
+  if (!data.trash || !data.trash.length) return;
+  if (!confirm(`确定永久删除回收站中的全部 ${data.trash.length} 项？此操作不可恢复。`)) return;
+  data.trash = [];
+  markDirty(); saveData();
+  renderTrash();
+}
+
+/* 清理超过保留期的回收站项目 */
+function cleanupExpiredTrash() {
+  if (!data.trash || !data.trash.length) return 0;
+  const now = Date.now();
+  const before = data.trash.length;
+  data.trash = data.trash.filter(item => (now - (item.deleted_at || 0)) < TRASH_TTL);
+  const removed = before - data.trash.length;
+  if (removed > 0) {
+    saveData();
+    setStatus(`回收站已自动清理 ${removed} 项超过 3 天的内容`);
+  }
+  return removed;
+}
+
+/* 渲染回收站列表 */
+function renderTrash() {
+  const list = $("#trash-list");
+  if (!list) return;
+  const items = data.trash || [];
+  if (!items.length) {
+    list.innerHTML = `<div class="trash-empty">回收站为空</div>`;
+    return;
+  }
+  const now = Date.now();
+  list.innerHTML = items.map((item, i) => {
+    const n = item.node;
+    const meta = TYPE_META[n.type] || { label: n.type, color: "#888" };
+    const deletedAt = new Date(item.deleted_at || 0);
+    const remainMs = TRASH_TTL - (now - (item.deleted_at || 0));
+    const remainDays = Math.max(0, Math.ceil(remainMs / (24 * 60 * 60 * 1000)));
+    const dateStr = `${deletedAt.getFullYear()}-${String(deletedAt.getMonth()+1).padStart(2,'0')}-${String(deletedAt.getDate()).padStart(2,'0')} ${String(deletedAt.getHours()).padStart(2,'0')}:${String(deletedAt.getMinutes()).padStart(2,'0')}`;
+    const kids = (n.children || []).length;
+    return `<div class="trash-item">
+      <span class="trash-dot" style="background:${meta.color}"></span>
+      <div class="trash-info">
+        <div class="trash-name">${escHtml(n.name || "(未命名)")}${kids ? ` <span class="trash-kids">(${kids} 子项)</span>` : ""}</div>
+        <div class="trash-meta">${meta.label} · 删除于 ${dateStr} · 剩余 ${remainDays} 天</div>
+      </div>
+      <div class="trash-actions">
+        <button class="btn small" data-trash-restore="${i}">恢复</button>
+        <button class="btn small danger" data-trash-purge="${i}">永久删除</button>
+      </div>
+    </div>`;
+  }).join("");
+
+  // 绑定按钮事件
+  list.querySelectorAll("[data-trash-restore]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const idx = parseInt(btn.dataset.trashRestore, 10);
+      if (restoreFromTrash(idx)) {
+        renderTrash();
+        setStatus("已恢复");
+      }
+    });
+  });
+  list.querySelectorAll("[data-trash-purge]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const idx = parseInt(btn.dataset.trashPurge, 10);
+      const item = data.trash && data.trash[idx];
+      if (!item) return;
+      if (!confirm(`确定永久删除【${item.node.name}】？此操作不可恢复。`)) return;
+      purgeTrashItem(idx);
+      renderTrash();
+    });
+  });
+}
+
+function openTrash() {
+  renderTrash();
+  $("#trash-mask").classList.remove("hidden");
+}
+function closeTrash() {
+  $("#trash-mask").classList.add("hidden");
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+/* ==================================================================
+ * 快捷粘贴面板
+ * ================================================================== */
+let quickCurrentType = null;
+
+/* 获取第一本小说的大纲 */
+function getFirstOutline() {
+  const novel = (data.children || []).find(c => c.type === "novel");
+  if (!novel) return null;
+  return (novel.children || []).find(c => c.type === "outline");
+}
+
+/* 加载类型列表 */
+function loadQuickTypes() {
+  const outline = getFirstOutline();
+  const list = $("#quick-types");
+  if (!list) return;
+  if (!outline || !outline.children || !outline.children.length) {
+    list.innerHTML = `<div class="quick-empty">暂无内容，请先在大纲下新建文档</div>`;
+    return;
+  }
+  // 收集有文档的类型文件夹
+  const groups = outline.children.filter(c => c.type === "group" && c.children && c.children.length);
+  if (!groups.length) {
+    list.innerHTML = `<div class="quick-empty">暂无内容</div>`;
+    return;
+  }
+  list.innerHTML = groups.map(g => {
+    const meta = TYPE_META[g.group_type] || { label: g.group_type, color: "#888" };
+    return `<div class="quick-item" data-type="${g.group_type}">
+      <span class="qd-dot" style="background:${meta.color}"></span>
+      <span>${escHtml(g.name || meta.label)}</span>
+      <span class="qd-count">${g.children.length}</span>
+    </div>`;
+  }).join("");
+  // 绑定点击事件
+  list.querySelectorAll(".quick-item").forEach(el => {
+    el.addEventListener("click", () => {
+      quickCurrentType = el.dataset.type;
+      loadQuickDocs(quickCurrentType);
+      $("#quick-types").classList.add("hidden");
+      $("#quick-docs").classList.remove("hidden");
+      $("#quick-back").classList.remove("hidden");
+    });
+  });
+}
+
+/* 加载指定类型的文档列表 */
+function loadQuickDocs(type) {
+  const outline = getFirstOutline();
+  const list = $("#quick-docs");
+  if (!list || !outline) return;
+  const group = (outline.children || []).find(c => c.type === "group" && c.group_type === type);
+  if (!group || !group.children || !group.children.length) {
+    list.innerHTML = `<div class="quick-empty">暂无文档</div>`;
+    return;
+  }
+  const meta = TYPE_META[type] || { label: type, color: "#888" };
+  list.innerHTML = group.children.map(n => {
+    return `<div class="quick-item" data-name="${escHtml(n.name || "")}">
+      <span class="qd-dot" style="background:${meta.color}"></span>
+      <span>${escHtml(n.name || "(未命名)")}</span>
+    </div>`;
+  }).join("");
+  // 绑定点击事件：点击文档名粘贴到光标前
+  list.querySelectorAll(".quick-item").forEach(el => {
+    el.addEventListener("click", () => {
+      const name = el.dataset.name;
+      if (name) insertTextAtCursor(name);
+    });
+  });
+}
+
+/* 在当前编辑器光标前插入文本 */
+function insertTextAtCursor(text) {
+  // 优先使用当前焦点元素
+  let target = document.activeElement;
+  // 如果焦点不在 contenteditable 元素上，用当前激活的 tab
+  if (!target || !target.isContentEditable) {
+    const tab = tabs.find(t => t.key === activeKey);
+    if (tab && tab.body) target = tab.body;
+  }
+  // 再检查分屏编辑器
+  if (!target || !target.isContentEditable) {
+    const splitEd = document.querySelector("#split-body .editor-content");
+    if (splitEd) target = splitEd;
+  }
+  if (!target || !target.isContentEditable) {
+    setStatus("请先打开一个文档并将光标放在编辑区");
+    return;
+  }
+  // 聚焦到目标编辑器
+  target.focus();
+  // 用 execCommand 插入文本（在 contenteditable 中仍广泛支持）
+  try {
+    document.execCommand("insertText", false, text);
+  } catch (e) {
+    // 降级：用 Range API 手动插入
+    const sel = window.getSelection();
+    if (sel.rangeCount > 0) {
+      const range = sel.getRangeAt(0);
+      range.deleteContents();
+      const textNode = document.createTextNode(text);
+      range.insertNode(textNode);
+      range.setStartAfter(textNode);
+      range.setEndAfter(textNode);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    } else {
+      target.innerText += text;
+    }
+  }
+  markDirty();
+  setStatus(`已粘贴：${text}`);
+}
+
+/* 展开/收起快捷面板 */
+function toggleQuickPanel() {
+  const panel = $("#quick-panel");
+  const body = $("#quick-body");
+  if (body.classList.contains("hidden")) {
+    body.classList.remove("hidden");
+    panel.classList.add("open");
+    quickCurrentType = null;
+    $("#quick-types").classList.remove("hidden");
+    $("#quick-docs").classList.add("hidden");
+    $("#quick-back").classList.add("hidden");
+    loadQuickTypes();
+  } else {
+    body.classList.add("hidden");
+    panel.classList.remove("open");
+  }
+}
+
+/* 返回类型列表 */
+function quickBackToTypes() {
+  quickCurrentType = null;
+  $("#quick-types").classList.remove("hidden");
+  $("#quick-docs").classList.add("hidden");
+  $("#quick-back").classList.add("hidden");
+}
+
+function deleteNode(node) {
+  const kids = (node.children || []).length;
+  const msg = kids ? `确定删除【${node.name}】及其 ${kids} 个子节点？（可在回收站恢复）` : `确定删除【${node.name}】？（可在回收站恢复）`;
+  if (!confirm(msg)) return;
+  moveToTrash(node);
+  cleanupAllEmptyGroups();
+  selectedIds.clear();
   markDirty(); saveData(); renderTree();
 }
 function batchDelete() {
   const nodes = [...selectedIds].map(findNode).filter(Boolean);
   if (!nodes.length) { alert("请先在左侧选中要删除的节点（Ctrl/Shift 多选）"); return; }
-  if (!confirm(`确定批量删除选中的 ${nodes.length} 个节点？`)) return;
-  nodes.forEach(n => { removeNode(data, n); closeTab(n); });
+  if (!confirm(`确定批量删除选中的 ${nodes.length} 个节点？（可在回收站恢复）`)) return;
+  nodes.forEach(n => moveToTrash(n));
   selectedIds.clear();
+  cleanupAllEmptyGroups();
   markDirty(); saveData(); renderTree();
 }
 
@@ -442,7 +908,17 @@ function showContextMenu(e, node) {
   title.textContent = `${meta.label} · ${node.name}`;
   menu.appendChild(title);
 
-  const allowed = CHILDREN_ALLOWED[node.type] || [];
+  // 确定可新建的子类型列表
+  let allowed;
+  if (node.type === "outline") {
+    // 大纲下直接显示所有可分组类型，内部自动建文件夹收录
+    allowed = GROUPABLE_TYPES;
+  } else if (node.type === "group") {
+    // 文件夹下只允许新建对应类型
+    allowed = node.group_type ? [node.group_type] : [];
+  } else {
+    allowed = CHILDREN_ALLOWED[node.type] || [];
+  }
   allowed.forEach(t => {
     // 每本小说只能有一个大纲，已有大纲时不显示新建大纲
     if (node.type === "novel" && t === "outline") {
@@ -459,9 +935,15 @@ function showContextMenu(e, node) {
   if (allowed.length) {
     menu.appendChild(sep());
   }
-  if (node.type !== "volume") addItem(menu, "分屏打开", () => openSplit(node));
+  if (node.type !== "volume" && node.type !== "group") addItem(menu, "分屏打开", () => openSplit(node));
   addItem(menu, "重命名", () => renameNode(node));
-  addItem(menu, "导出本节点", () => exportNodes([node]));
+  // 导出选项：文件夹显示批量导出，其他显示单个导出
+  if (node.type === "group") {
+    const docCount = (node.children || []).length;
+    addItem(menu, `导出文件夹内全部文档（${docCount}个）`, () => exportFolder(node));
+  } else if (node.type !== "novel" && node.type !== "outline" && node.type !== "volume") {
+    addItem(menu, "导出本文档", () => exportSingleDoc(node));
+  }
   menu.appendChild(sep());
   if (selectedIds.size > 1) {
     addItem(menu, `批量删除选中（${selectedIds.size} 项）`, batchDelete, "danger");
@@ -526,6 +1008,9 @@ function openEditor(node) {
       <button class="tb-btn tb-bold" title="加粗"><b>B</b></button>
       <div class="sep"></div>
       <button class="tb-btn tb-save">💾 保存本节点</button>
+      <button class="tb-btn tb-undo" title="撤销 (Ctrl+Z)">↩ 撤销</button>
+      <button class="tb-btn tb-redo" title="重做 (Ctrl+Y)">↪ 重做</button>
+      <button class="tb-btn tb-history" title="查看历史版本，可回退">📜 历史</button>
       <button class="tb-btn tb-split">⧉ 分屏</button>
       <button class="tb-btn tb-script" title="将小说正文转换为剧本格式">🎬 转剧本</button>
     </div>
@@ -561,13 +1046,35 @@ function openEditor(node) {
     body.focus(); document.execCommand("bold");
   });
   pane.querySelector(".tb-save").addEventListener("click", () => saveNodeField(node, body));
+  pane.querySelector(".tb-undo").addEventListener("click", () => {
+    const tab = tabs.find(t => t.key === key);
+    if (tab) { if (tab.undoTimer) { clearTimeout(tab.undoTimer); tab.undoTimer = null; } undoEditor(tab); }
+  });
+  pane.querySelector(".tb-redo").addEventListener("click", () => {
+    const tab = tabs.find(t => t.key === key);
+    if (tab) redoEditor(tab);
+  });
+  pane.querySelector(".tb-history").addEventListener("click", () => openHistoryModal(node, body));
   pane.querySelector(".tb-split").addEventListener("click", () => openSplit(node));
   pane.querySelector(".tb-script").addEventListener("click", () => openScriptModal(node, body));
-  body.addEventListener("input", () => markDirty());
+  body.addEventListener("input", () => {
+    markDirty();
+    scheduleAutoSave(node, body);
+    // 防抖记录撤销快照
+    const tab = tabs.find(t => t.key === key);
+    if (tab) scheduleUndoSnapshot(tab);
+  });
 
   $("#editor-container").appendChild(pane);
 
-  tabs.push({ key, node, head, pane, body });
+  // 初始化撤销/重做栈
+  const tabObj = {
+    key, node, head, pane, body,
+    undoStack: [],       // 撤销栈：保存之前的状态
+    redoStack: [],       // 重做栈：保存撤销后的状态
+    undoTimer: null,     // 撤销快照防抖定时器
+  };
+  tabs.push(tabObj);
   // 清空空状态
   const es = $("#empty-state");
   if (es) es.style.display = "none";
@@ -582,6 +1089,16 @@ function mapSize(px) {
 
 function saveNodeField(node, body) {
   let text = (body.innerText || "").replace(/\n+$/, "").trim();
+  // 获取当前已保存的文本，用于比较是否有变化
+  let oldText = node.content;
+  if (node.type === "character" || node.type === "inspire") oldText = node.note;
+  else if (node.type === "storyline" || node.type === "relation") {
+    oldText = Array.isArray(node.tree_data) ? node.tree_data.join("\n") : (node.content || "");
+  }
+  // 内容有变化时才记录历史版本
+  if (text !== oldText) {
+    pushHistory(node, oldText || "");
+  }
   if (node.type === "character" || node.type === "inspire") node.note = text;
   else if (node.type === "storyline" || node.type === "relation") node.tree_data = text.split("\n");
   else node.content = text;
@@ -589,7 +1106,259 @@ function saveNodeField(node, body) {
   setStatus("已保存：" + node.name);
 }
 
+/* 记录节点的历史版本 */
+function pushHistory(node, text) {
+  if (!node.history) node.history = [];
+  // 避免重复记录相同内容
+  if (node.history.length && node.history[node.history.length - 1].text === text) return;
+  node.history.push({ text, time: Date.now() });
+  // 限制历史版本数量
+  if (node.history.length > MAX_HISTORY) {
+    node.history = node.history.slice(node.history.length - MAX_HISTORY);
+  }
+}
+
+/* 回退到指定历史版本 */
+function revertToHistory(node, body, index) {
+  if (!node.history || !node.history[index]) return false;
+  const item = node.history[index];
+  // 把当前内容保存为历史版本（回退后还能回来）
+  const currentText = (body.innerText || "").replace(/\n+$/, "").trim();
+  pushHistory(node, currentText);
+  // 恢复历史版本内容到编辑器
+  body.textContent = item.text || "";
+  // 保存到节点
+  if (node.type === "character" || node.type === "inspire") node.note = item.text || "";
+  else if (node.type === "storyline" || node.type === "relation") node.tree_data = (item.text || "").split("\n");
+  else node.content = item.text || "";
+  saveData();
+  setStatus(`已回退到 ${formatTime(item.time)} 的版本`);
+  return true;
+}
+
+function formatTime(ts) {
+  const d = new Date(ts);
+  return `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+}
+
+/* ==================================================================
+ * 撤销 / 重做（Undo / Redo）
+ * ================================================================== */
+const UNDO_DELAY = 500;   // 输入停止 500ms 后记录一个撤销快照
+const UNDO_MAX = 50;       // 最大撤销步数
+
+/* 获取光标在元素纯文本中的偏移量 */
+function getCaretOffset(el) {
+  const sel = window.getSelection();
+  if (!sel.rangeCount) return 0;
+  const range = sel.getRangeAt(0);
+  const preRange = range.cloneRange();
+  preRange.selectNodeContents(el);
+  preRange.setEnd(range.endContainer, range.endOffset);
+  return preRange.toString().length;
+}
+
+/* 设置光标在元素纯文本中的偏移量 */
+function setCaretOffset(el, offset) {
+  const range = document.createRange();
+  const sel = window.getSelection();
+  let current = 0;
+  let found = false;
+  (function walk(node) {
+    if (found) return;
+    if (node.nodeType === Node.TEXT_NODE) {
+      const len = node.textContent.length;
+      if (current + len >= offset) {
+        range.setStart(node, offset - current);
+        range.collapse(true);
+        found = true;
+        return;
+      }
+      current += len;
+    } else {
+      for (let i = 0; i < node.childNodes.length; i++) {
+        walk(node.childNodes[i]);
+        if (found) return;
+      }
+    }
+  })(el);
+  if (!found) {
+    range.selectNodeContents(el);
+    range.collapse(false);
+  }
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
+/* 记录撤销快照 */
+function recordUndoSnapshot(tab) {
+  if (!tab || !tab.body) return;
+  const text = tab.body.innerText || "";
+  // 避免重复记录相同内容
+  if (tab.undoStack.length && tab.undoStack[tab.undoStack.length - 1].text === text) return;
+  tab.undoStack.push({
+    text,
+    caret: getCaretOffset(tab.body),
+  });
+  if (tab.undoStack.length > UNDO_MAX) {
+    tab.undoStack.shift();
+  }
+  // 新输入时清空重做栈
+  tab.redoStack = [];
+}
+
+/* 防抖记录撤销快照（输入停止 UNDO_DELAY 毫秒后记录） */
+function scheduleUndoSnapshot(tab) {
+  if (tab.undoTimer) clearTimeout(tab.undoTimer);
+  tab.undoTimer = setTimeout(() => {
+    recordUndoSnapshot(tab);
+    tab.undoTimer = null;
+  }, UNDO_DELAY);
+}
+
+/* 撤销 */
+function undoEditor(tab) {
+  if (!tab || !tab.body || !tab.undoStack.length) {
+    setStatus("没有可撤销的操作");
+    return;
+  }
+  // 先把当前状态保存到重做栈
+  const currentText = tab.body.innerText || "";
+  const currentCaret = getCaretOffset(tab.body);
+  tab.redoStack.push({ text: currentText, caret: currentCaret });
+
+  // 恢复到上一个状态
+  const snapshot = tab.undoStack.pop();
+  tab.body.innerText = snapshot.text || "";
+  // 恢复光标位置
+  tab.body.focus();
+  setCaretOffset(tab.body, Math.min(snapshot.caret, (snapshot.text || "").length));
+  markDirty();
+  setStatus("已撤销");
+}
+
+/* 重做 */
+function redoEditor(tab) {
+  if (!tab || !tab.body || !tab.redoStack.length) {
+    setStatus("没有可重做的操作");
+    return;
+  }
+  // 先把当前状态保存到撤销栈
+  const currentText = tab.body.innerText || "";
+  const currentCaret = getCaretOffset(tab.body);
+  tab.undoStack.push({ text: currentText, caret: currentCaret });
+
+  // 恢复到下一个状态
+  const snapshot = tab.redoStack.pop();
+  tab.body.innerText = snapshot.text || "";
+  tab.body.focus();
+  setCaretOffset(tab.body, Math.min(snapshot.caret, (snapshot.text || "").length));
+  markDirty();
+  setStatus("已重做");
+}
+
+/* 获取当前激活的 tab */
+function getActiveTab() {
+  return tabs.find(t => t.key === activeKey);
+}
+
+/* 打开历史版本弹窗 */
+let historyNode = null;
+let historyBody = null;
+let historySelectedIndex = -1;
+
+function openHistoryModal(node, body) {
+  historyNode = node;
+  historyBody = body;
+  historySelectedIndex = -1;
+  renderHistoryList();
+  $("#history-list").classList.remove("hidden");
+  $("#history-preview").classList.add("hidden");
+  $("#history-mask").classList.remove("hidden");
+}
+
+function closeHistoryModal() {
+  $("#history-mask").classList.add("hidden");
+  historyNode = null;
+  historyBody = null;
+  historySelectedIndex = -1;
+}
+
+/* 渲染历史版本列表 */
+function renderHistoryList() {
+  const list = $("#history-list");
+  if (!historyNode || !historyNode.history || !historyNode.history.length) {
+    list.innerHTML = `<div class="history-empty">暂无历史版本<br><span style="font-size:11px">编辑并保存后会自动记录版本</span></div>`;
+    return;
+  }
+  // 倒序显示，最新的在前面
+  const items = historyNode.history.slice().reverse();
+  list.innerHTML = items.map((item, revIdx) => {
+    const realIdx = historyNode.history.length - 1 - revIdx;
+    const preview = (item.text || "").replace(/\n/g, " ").substring(0, 60);
+    const len = (item.text || "").length;
+    return `<div class="history-item" data-idx="${realIdx}">
+      <span class="h-time">${formatTime(item.time)}</span>
+      <span class="h-preview">${escHtml(preview) || "(空)"}</span>
+      <span class="h-len">${len}字</span>
+    </div>`;
+  }).join("");
+  // 绑定点击事件
+  list.querySelectorAll(".history-item").forEach(el => {
+    el.addEventListener("click", () => {
+      historySelectedIndex = parseInt(el.dataset.idx, 10);
+      showHistoryPreview(historySelectedIndex);
+    });
+  });
+}
+
+/* 显示历史版本预览 */
+function showHistoryPreview(index) {
+  if (!historyNode || !historyNode.history || !historyNode.history[index]) return;
+  const item = historyNode.history[index];
+  $("#history-preview-title").textContent = `${formatTime(item.time)} 的版本（${(item.text || "").length}字）`;
+  $("#history-preview-content").textContent = item.text || "(空内容)";
+  $("#history-list").classList.add("hidden");
+  $("#history-preview").classList.remove("hidden");
+}
+
+/* 回退到选中的历史版本 */
+function doRevertHistory() {
+  if (historySelectedIndex < 0 || !historyNode || !historyBody) return;
+  const item = historyNode.history[historySelectedIndex];
+  if (!item) return;
+  if (!confirm(`确定回退到 ${formatTime(item.time)} 的版本？\n当前内容会被保存为新版本，仍可恢复。`)) return;
+  revertToHistory(historyNode, historyBody, historySelectedIndex);
+  closeHistoryModal();
+}
+
+/* 防抖自动保存：输入停止 AUTO_SAVE_DELAY 毫秒后保存当前节点 */
+function scheduleAutoSave(node, body) {
+  if (autoSaveTimer) clearTimeout(autoSaveTimer);
+  autoSaveTimer = setTimeout(() => {
+    saveNodeField(node, body);
+    autoSaveTimer = null;
+  }, AUTO_SAVE_DELAY);
+}
+
+/* 立即执行待保存的自动保存（切换 tab、关闭窗口前调用） */
+function flushAutoSave() {
+  if (autoSaveTimer) {
+    clearTimeout(autoSaveTimer);
+    autoSaveTimer = null;
+    // 找到当前激活的 tab 并保存
+    const tab = tabs.find(t => t.key === activeKey);
+    if (tab) saveNodeField(tab.node, tab.body);
+  }
+}
+
 function activateTab(key) {
+  // 切换前先保存当前 tab
+  if (activeKey && activeKey !== key) {
+    const current = tabs.find(t => t.key === activeKey);
+    if (current) saveNodeField(current.node, current.body);
+  }
+  if (autoSaveTimer) { clearTimeout(autoSaveTimer); autoSaveTimer = null; }
   activeKey = key;
   tabs.forEach(t => {
     const on = t.key === key;
@@ -601,6 +1370,12 @@ function closeTab(node) {
   const key = getNodeId(node);
   const idx = tabs.findIndex(t => t.key === key);
   if (idx < 0) return;
+  // 关闭前保存该 tab 的内容
+  saveNodeField(tabs[idx].node, tabs[idx].body);
+  if (autoSaveTimer && tabs[idx].key === activeKey) {
+    clearTimeout(autoSaveTimer);
+    autoSaveTimer = null;
+  }
   tabs[idx].head.remove();
   tabs[idx].pane.remove();
   tabs.splice(idx, 1);
@@ -642,7 +1417,20 @@ function openSplit(node) {
     content = (node.content || "") + (Array.isArray(node.tree_data) ? "\n" + node.tree_data.join("\n") : "");
   }
   ed.textContent = content || "";
-  ed.addEventListener("input", () => markDirty());
+  ed.addEventListener("input", () => {
+    markDirty();
+    // 分屏编辑器也防抖自动保存
+    if (autoSaveTimer) clearTimeout(autoSaveTimer);
+    autoSaveTimer = setTimeout(() => {
+      let t = (ed.innerText || "").replace(/\n+$/, "").trim();
+      if (node.type === "character" || node.type === "inspire") node.note = t;
+      else if (node.type === "storyline" || node.type === "relation") node.tree_data = t.split("\n");
+      else node.content = t;
+      saveData();
+      setStatus("已保存：" + node.name);
+      autoSaveTimer = null;
+    }, AUTO_SAVE_DELAY);
+  });
   ed.addEventListener("blur", () => {
     let t = (ed.innerText || "").replace(/\n+$/, "").trim();
     if (node.type === "character" || node.type === "inspire") node.note = t;
@@ -650,7 +1438,23 @@ function openSplit(node) {
     else node.content = t;
   });
 }
-function closeSplit() { $("#split-panel").classList.add("hidden"); }
+function closeSplit() {
+  // 关闭分屏前保存内容
+  const ed = document.querySelector("#split-body .editor-content");
+  if (ed) {
+    const splitTitle = $("#split-title").textContent || "";
+    const nodeName = splitTitle.replace(" · 分屏", "");
+    // 找到对应节点并保存
+    const tab = tabs.find(t => t.node.name === nodeName);
+    if (tab) saveNodeField(tab.node, ed);
+    else {
+      // 兜底：直接保存内容到文件
+      saveData();
+    }
+  }
+  if (autoSaveTimer) { clearTimeout(autoSaveTimer); autoSaveTimer = null; }
+  $("#split-panel").classList.add("hidden");
+}
 
 /* ==================================================================
  * 树状图编辑器（故事线 / 人物关系）
@@ -976,6 +1780,90 @@ function download(text, filename) {
   URL.revokeObjectURL(a.href);
 }
 
+/* 选择导出路径 */
+async function chooseExportDir() {
+  try {
+    const res = await fetch("/api/choose-export-dir", { method: "POST" });
+    const out = await res.json();
+    if (out.ok && out.path) {
+      settings.export_dir = out.path;
+      saveSettings();
+      syncSettingsUI();
+      setStatus("导出路径已设置：" + out.path);
+    }
+  } catch (e) {
+    alert("选择文件夹失败：" + e.message);
+  }
+}
+
+/* 获取节点的文本内容 */
+function getNodeText(node) {
+  if (node.type === "character" || node.type === "inspire") return node.note || "";
+  if (node.type === "storyline" || node.type === "relation") {
+    return Array.isArray(node.tree_data) ? node.tree_data.join("\n") : (node.content || "");
+  }
+  return node.content || "";
+}
+
+/* 调用后端 API 保存导出文件 */
+async function saveExportFile(filename, content, subdir) {
+  try {
+    const res = await fetch("/api/export", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename, content, subdir: subdir || "" }),
+    });
+    return await res.json();
+  } catch (e) {
+    return { ok: false, message: "导出请求失败：" + e.message };
+  }
+}
+
+/* 导出单个文档 */
+async function exportSingleDoc(node) {
+  const text = getNodeText(node);
+  const filename = (node.name || "未命名") + ".txt";
+  const result = await saveExportFile(filename, text);
+  if (result.ok) {
+    setStatus("已导出：" + result.path);
+  } else {
+    alert("导出失败：" + (result.message || "未知错误"));
+  }
+}
+
+/* 导出文件夹下所有文档（分别导出，不合并） */
+async function exportFolder(group) {
+  if (!group.children || !group.children.length) {
+    alert("该文件夹下没有文档");
+    return;
+  }
+  const subdir = group.name || "导出";
+  let success = 0;
+  let failed = 0;
+  for (const doc of group.children) {
+    const text = getNodeText(doc);
+    const filename = (doc.name || "未命名") + ".txt";
+    const result = await saveExportFile(filename, text, subdir);
+    if (result.ok) success++;
+    else failed++;
+  }
+  if (failed === 0) {
+    setStatus(`已导出 ${success} 个文档到「${subdir}」文件夹`);
+  } else {
+    alert(`导出完成：成功 ${success} 个，失败 ${failed} 个`);
+    setStatus(`导出完成：成功 ${success} 个，失败 ${failed} 个`);
+  }
+}
+
+/* 导出节点（根据类型自动判断单个还是文件夹） */
+function exportNode(node) {
+  if (node.type === "group") {
+    exportFolder(node);
+  } else {
+    exportSingleDoc(node);
+  }
+}
+
 /* ==================================================================
  * 主题 / 背景
  * ================================================================== */
@@ -1014,6 +1902,12 @@ function syncSettingsUI() {
     prev.style.alignItems = "center";
     prev.style.justifyContent = "center";
   }
+  // 导出路径
+  const exportDirEl = $("#export-dir-name");
+  if (exportDirEl) {
+    exportDirEl.textContent = settings.export_dir || "未设置（默认保存到软件目录）";
+    exportDirEl.title = settings.export_dir || "";
+  }
 }
 
 /* ==================================================================
@@ -1029,10 +1923,25 @@ function stripMeta(node) {
   delete node._id; delete node._expanded;
   (node.children || []).forEach(stripMeta);
 }
+function stripTrashMeta() {
+  (data.trash || []).forEach(item => {
+    (function strip(n) {
+      delete n._id; delete n._expanded;
+      (n.children || []).forEach(strip);
+    })(item.node);
+  });
+}
 async function saveData() {
   // 移除临时 meta 字段后保存
   const clone = JSON.parse(JSON.stringify(data));
   stripMeta(clone);
+  // 清理回收站节点的临时字段
+  (clone.trash || []).forEach(item => {
+    (function strip(n) {
+      delete n._id; delete n._expanded;
+      (n.children || []).forEach(strip);
+    })(item.node);
+  });
   try {
     await fetch("/api/data", {
       method: "POST",
@@ -1117,15 +2026,54 @@ function bindGlobal() {
   $$(".vbtn").forEach(b => b.addEventListener("click", () => switchView(b.dataset.view)));
 
   // 保存
-  $("#btn-save").addEventListener("click", () => saveData());
+  $("#btn-save").addEventListener("click", () => {
+    if (autoSaveTimer) { clearTimeout(autoSaveTimer); autoSaveTimer = null; }
+    saveData();
+  });
   document.addEventListener("keydown", (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+    const ctrl = e.ctrlKey || e.metaKey;
+    const key = e.key.toLowerCase();
+
+    // Ctrl+Z：撤销
+    if (ctrl && key === "z" && !e.shiftKey) {
+      const tab = getActiveTab();
+      if (tab && tab.body && document.activeElement === tab.body) {
+        e.preventDefault();
+        // 先清除待记录的快照
+        if (tab.undoTimer) { clearTimeout(tab.undoTimer); tab.undoTimer = null; }
+        undoEditor(tab);
+        return;
+      }
+    }
+
+    // Ctrl+Y 或 Ctrl+Shift+Z：重做
+    if (ctrl && (key === "y" || (key === "z" && e.shiftKey))) {
+      const tab = getActiveTab();
+      if (tab && tab.body && document.activeElement === tab.body) {
+        e.preventDefault();
+        redoEditor(tab);
+        return;
+      }
+    }
+
+    // Ctrl+S：保存
+    if (ctrl && key === "s") {
       e.preventDefault();
+      // 清除防抖定时器，立即保存
+      if (autoSaveTimer) { clearTimeout(autoSaveTimer); autoSaveTimer = null; }
       // 保存当前激活编辑器
       const t = tabs.find(x => x.key === activeKey);
       if (t) saveNodeField(t.node, t.body);
       saveData();
     }
+  });
+
+  // 页面关闭/刷新前自动保存
+  window.addEventListener("beforeunload", () => {
+    if (autoSaveTimer) { clearTimeout(autoSaveTimer); autoSaveTimer = null; }
+    const t = tabs.find(x => x.key === activeKey);
+    if (t) saveNodeField(t.node, t.body);
+    saveData();
   });
 
   // 新建小说
@@ -1136,12 +2084,60 @@ function bindGlobal() {
   $("#btn-export").addEventListener("click", () => {
     if (selectedIds.size) {
       const nodes = [...selectedIds].map(findNode).filter(Boolean);
-      exportNodes(nodes);
-    } else exportAll();
+      if (nodes.length === 1) {
+        exportNode(nodes[0]);
+      } else {
+        // 多个节点：逐个导出，每个文档单独保存
+        (async () => {
+          let success = 0;
+          for (const n of nodes) {
+            if (n.type === "group") {
+              // 文件夹：导出文件夹内全部文档
+              if (n.children && n.children.length) {
+                for (const doc of n.children) {
+                  const result = await saveExportFile((doc.name || "未命名") + ".txt", getNodeText(doc), n.name);
+                  if (result.ok) success++;
+                }
+              }
+            } else if (n.type !== "novel" && n.type !== "outline" && n.type !== "volume") {
+              const result = await saveExportFile((n.name || "未命名") + ".txt", getNodeText(n));
+              if (result.ok) success++;
+            }
+          }
+          setStatus(`已导出 ${success} 个文档`);
+        })();
+      }
+    } else {
+      alert("请先在左侧选中要导出的文档或文件夹（可 Ctrl/Shift 多选），然后点导出；或右键文档选择「导出本文档」。");
+    }
   });
 
   // 批量删除
   $("#btn-batch-del").addEventListener("click", batchDelete);
+
+  // 回收站
+  $("#btn-trash").addEventListener("click", openTrash);
+  $("#trash-close").addEventListener("click", closeTrash);
+  $("#trash-ok").addEventListener("click", closeTrash);
+  $("#trash-empty").addEventListener("click", emptyTrash);
+  $("#trash-mask").addEventListener("click", (e) => {
+    if (e.target.id === "trash-mask") closeTrash();
+  });
+
+  // 快捷粘贴面板
+  $("#quick-toggle").addEventListener("click", toggleQuickPanel);
+  $("#quick-back").addEventListener("click", quickBackToTypes);
+
+  // 历史版本弹窗
+  $("#history-close").addEventListener("click", closeHistoryModal);
+  $("#history-back").addEventListener("click", () => {
+    $("#history-preview").classList.add("hidden");
+    $("#history-list").classList.remove("hidden");
+  });
+  $("#history-revert").addEventListener("click", doRevertHistory);
+  $("#history-mask").addEventListener("click", (e) => {
+    if (e.target.id === "history-mask") closeHistoryModal();
+  });
 
   // 设置弹窗
   $("#btn-settings").addEventListener("click", openSettingsModal);
@@ -1158,6 +2154,10 @@ function bindGlobal() {
     applyBg(); syncSettingsUI(); saveSettings();
   });
   $("#bg-file").addEventListener("change", uploadBg);
+
+  // 选择导出路径
+  const btnChooseExport = $("#btn-choose-export-dir");
+  if (btnChooseExport) btnChooseExport.addEventListener("click", chooseExportDir);
 
   // 分段主题选择（在设置弹窗内切换，立即生效并保存）
   $$("#seg-theme button").forEach(b => b.addEventListener("click", () => {
@@ -1251,7 +2251,7 @@ function applySettings() {
 }
 function resetSettings() {
   settings = { theme: "day", font_size: 14, font_color: "#222222", background_image: "",
-               ai_base_url: "", ai_api_key: "", ai_model: "" };
+               ai_base_url: "", ai_api_key: "", ai_model: "", export_dir: "" };
   applyTheme("day"); applyBg(); syncSettingsUI();
 }
 async function uploadBg(e) {
